@@ -11,3 +11,33 @@ python3.10 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 mkdir -p models && curl -o models/hand_landmarker.task https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task
 ```
+
+## Gesture module
+
+```bash
+.venv/bin/python gesture_detection.py
+```
+
+Press `q` to quit. If the wrong camera opens, for example an iPhone through Continuity Camera, choose another with `--camera 1`.
+
+| Gesture | Command |
+|---|---|
+| Open hand | `stop` |
+| Fist | `close_gripper` |
+| Point left | `move_left` |
+| Point right | `move_right` |
+
+Each frame produces a `command`, `tracking_status` and `timestamp`. The command is `None` when no gesture is active, and `stop` when no hand is visible.
+
+```python
+with GestureDetector(mirrored=True) as detector:
+    output = detector.process(frame, timestamp=capture_time)
+```
+
+Set `mirrored=True` if the frame is flipped into selfie view, otherwise `mirrored=False`.
+
+## Tests
+
+```bash
+.venv/bin/python -m pytest
+```
