@@ -36,6 +36,20 @@ with GestureDetector(mirrored=True) as detector:
 
 Set `mirrored=True` if the frame is flipped into selfie view, otherwise `mirrored=False`.
 
+## Gesture accuracy test
+
+Prompts for each gesture in random order, then reports accuracy per gesture, which gestures get confused, and tracking failures. Use a participant ID rather than a name.
+
+```bash
+.venv/bin/python gesture_accuracy.py --participant p1
+```
+
+Results are saved in `results/`. To combine every session:
+
+```bash
+.venv/bin/python gesture_accuracy.py --summarize results/*.csv
+```
+
 ## Tests
 
 ```bash
