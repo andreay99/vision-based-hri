@@ -1,6 +1,11 @@
 """Hand gesture module (Person 1).
 
-Tracks a hand in webcam frames using MediaPipe.
+Turns webcam frames into robot commands using MediaPipe hand tracking.
+
+    open hand       -> "stop"
+    fist            -> "close_gripper"
+    point left      -> "move_left"
+    point right     -> "move_right"
 
 In the integrated app, Person 4 owns the webcam and passes each frame in:
 
@@ -24,18 +29,53 @@ import numpy as np
 
 DEFAULT_MODEL_PATH = Path(__file__).parent / "models" / "hand_landmarker.task"
 
-# Command sent when no hand is visible
+# Gestures
+OPEN_HAND = "open_hand"
+FIST = "fist"
+POINT_LEFT = "point_left"
+POINT_RIGHT = "point_right"
+UNKNOWN = "unknown"
+
+# Commands
 STOP = "stop"
+CLOSE_GRIPPER = "close_gripper"
+MOVE_LEFT = "move_left"
+MOVE_RIGHT = "move_right"
+
+GESTURE_TO_COMMAND = {
+    OPEN_HAND: STOP,
+    FIST: CLOSE_GRIPPER,
+    POINT_LEFT: MOVE_LEFT,
+    POINT_RIGHT: MOVE_RIGHT,
+    UNKNOWN: None,
+}
 
 # Tracking status
 TRACKING = "tracking"
 LOST = "lost"
 
+# MediaPipe hand landmark indices
+WRIST = 0
+INDEX_MCP = 5
+# (PIP joint, fingertip) for the index, middle, ring and pinky fingers.
+# The thumb is ignored: it is unreliable and no gesture depends on it.
+INDEX_FINGER = (6, 8)
+OTHER_FINGERS = ((10, 12), (14, 16), (18, 20))
+
+# Tuning values. These are starting points to adjust using Week 4 accuracy data.
+# A finger is judged by (wrist-to-tip distance) / (wrist-to-PIP distance).
+# Ratios between the two thresholds count as neither, which gives UNKNOWN.
+EXTENDED_RATIO = 1.2
+CURLED_RATIO = 1.0
+# A point must be this many times more horizontal than vertical (about 34 degrees).
+HORIZONTAL_DOMINANCE = 1.5
+
+
 @dataclass(frozen=True)
 class GestureOutput:
     """Result for one frame.
 
-    command: STOP when no hand is visible, otherwise None for now.
+    command: command to act on, or None for no command.
     tracking_status: TRACKING or LOST.
     timestamp: capture time of the frame, passed through for latency logging.
     gesture: gesture detected in this frame.
@@ -47,10 +87,44 @@ class GestureOutput:
     gesture: Optional[str] = None
 
 
-class GestureDetector:
-    """Runs hand tracking on a stream of video frames."""
+def _finger_ratio(world: np.ndarray, finger: tuple) -> float:
+    pip, tip = finger
+    wrist = world[WRIST]
+    pip_distance = np.linalg.norm(world[pip] - wrist)
+    if pip_distance == 0:
+        return 0.0
+    return float(np.linalg.norm(world[tip] - wrist) / pip_distance)
 
-    def __init__(self, model_path=DEFAULT_MODEL_PATH):
+
+def classify_gesture(world: np.ndarray, image_xy: np.ndarray, mirrored: bool = True) -> str:
+    """Classify one hand.
+
+    world: 21x3 landmarks in metres, used for finger bend because they do not
+        depend on how far the hand is from the camera.
+    image_xy: 21x2 landmarks in pixels, used for pointing direction.
+    mirrored: True if the frame was flipped into a selfie view. Left and right
+        are always from the user's point of view.
+    """
+    index = _finger_ratio(world, INDEX_FINGER)
+    others = [_finger_ratio(world, finger) for finger in OTHER_FINGERS]
+
+    if index > EXTENDED_RATIO and all(r > EXTENDED_RATIO for r in others):
+        return OPEN_HAND
+    if index < CURLED_RATIO and all(r < CURLED_RATIO for r in others):
+        return FIST
+    if index > EXTENDED_RATIO and all(r < CURLED_RATIO for r in others):
+        dx, dy = image_xy[INDEX_FINGER[1]] - image_xy[INDEX_MCP]
+        if abs(dx) < HORIZONTAL_DOMINANCE * abs(dy) or dx == 0:
+            return UNKNOWN
+        points_image_left = dx < 0
+        return POINT_LEFT if points_image_left == mirrored else POINT_RIGHT
+    return UNKNOWN
+
+
+class GestureDetector:
+    """Runs hand tracking and gesture classification on a stream of video frames."""
+
+    def __init__(self, model_path=DEFAULT_MODEL_PATH, mirrored: bool = True):
         model_path = Path(model_path)
         if not model_path.exists():
             raise FileNotFoundError(
@@ -64,6 +138,7 @@ class GestureDetector:
             num_hands=1,
         )
         self._landmarker = mp.tasks.vision.HandLandmarker.create_from_options(options)
+        self._mirrored = mirrored
         self._last_ms = -1
         self.last_landmarks = None
 
@@ -90,7 +165,10 @@ class GestureDetector:
         self.last_landmarks = np.array(
             [(p.x * width, p.y * height) for p in result.hand_landmarks[0]]
         )
-        return GestureOutput(None, TRACKING, timestamp)
+        world = np.array([(p.x, p.y, p.z) for p in result.hand_world_landmarks[0]])
+
+        gesture = classify_gesture(world, self.last_landmarks, self._mirrored)
+        return GestureOutput(GESTURE_TO_COMMAND[gesture], TRACKING, timestamp, gesture)
 
     def close(self) -> None:
         self._landmarker.close()
@@ -127,7 +205,7 @@ def main() -> None:
         raise RuntimeError("Could not open the webcam. Check camera permissions.")
 
     try:
-        with GestureDetector() as detector:
+        with GestureDetector(mirrored=True) as detector:
             while True:
                 ok, frame = capture.read()
                 if not ok:
