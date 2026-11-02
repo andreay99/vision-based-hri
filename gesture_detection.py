@@ -69,16 +69,20 @@ EXTENDED_RATIO = 1.2
 CURLED_RATIO = 1.0
 # A point must be this many times more horizontal than vertical (about 34 degrees).
 HORIZONTAL_DOMINANCE = 1.5
+# Consecutive frames required before a new command takes effect.
+CONFIRM_FRAMES = 5
+# Stopping is the safety command, so it takes effect faster than the others.
+STOP_CONFIRM_FRAMES = 2
 
 
 @dataclass(frozen=True)
 class GestureOutput:
     """Result for one frame.
 
-    command: command to act on, or None for no command.
+    command: filtered command to act on, or None for no command.
     tracking_status: TRACKING or LOST.
     timestamp: capture time of the frame, passed through for latency logging.
-    gesture: gesture detected in this frame.
+    gesture: unfiltered gesture for this frame, used to measure accuracy.
     """
 
     command: Optional[str]
@@ -121,8 +125,39 @@ def classify_gesture(world: np.ndarray, image_xy: np.ndarray, mirrored: bool = T
     return UNKNOWN
 
 
+class CommandFilter:
+    """Debounces gestures so a brief misdetection cannot change the command.
+
+    A gesture must be seen for several frames in a row before its command takes
+    effect. The active command then repeats on every frame until replaced.
+    """
+
+    def __init__(self, confirm_frames: int = CONFIRM_FRAMES, stop_confirm_frames: int = STOP_CONFIRM_FRAMES):
+        self.confirm_frames = confirm_frames
+        self.stop_confirm_frames = stop_confirm_frames
+        self.reset()
+
+    def reset(self) -> None:
+        self.active = None
+        self._candidate = None
+        self._count = 0
+
+    def update(self, gesture: str) -> Optional[str]:
+        if gesture == self._candidate:
+            self._count += 1
+        else:
+            self._candidate = gesture
+            self._count = 1
+
+        command = GESTURE_TO_COMMAND[gesture]
+        needed = self.stop_confirm_frames if command == STOP else self.confirm_frames
+        if self._count >= needed:
+            self.active = command
+        return self.active
+
+
 class GestureDetector:
-    """Runs hand tracking and gesture classification on a stream of video frames."""
+    """Runs hand tracking and gesture filtering on a stream of video frames."""
 
     def __init__(self, model_path=DEFAULT_MODEL_PATH, mirrored: bool = True):
         model_path = Path(model_path)
@@ -138,6 +173,7 @@ class GestureDetector:
             num_hands=1,
         )
         self._landmarker = mp.tasks.vision.HandLandmarker.create_from_options(options)
+        self._filter = CommandFilter()
         self._mirrored = mirrored
         self._last_ms = -1
         self.last_landmarks = None
@@ -159,6 +195,7 @@ class GestureDetector:
 
         if not result.hand_landmarks:
             self.last_landmarks = None
+            self._filter.reset()
             return GestureOutput(STOP, LOST, timestamp)
 
         height, width = frame.shape[:2]
@@ -168,7 +205,7 @@ class GestureDetector:
         world = np.array([(p.x, p.y, p.z) for p in result.hand_world_landmarks[0]])
 
         gesture = classify_gesture(world, self.last_landmarks, self._mirrored)
-        return GestureOutput(GESTURE_TO_COMMAND[gesture], TRACKING, timestamp, gesture)
+        return GestureOutput(self._filter.update(gesture), TRACKING, timestamp, gesture)
 
     def close(self) -> None:
         self._landmarker.close()
