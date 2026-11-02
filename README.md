@@ -18,7 +18,7 @@ mkdir -p models && curl -o models/hand_landmarker.task https://storage.googleapi
 .venv/bin/python gesture_detection.py
 ```
 
-Press `q` to quit.
+Press `q` to quit. If the wrong camera opens, for example an iPhone through Continuity Camera, choose another with `--camera 1`.
 
 | Gesture | Command |
 |---|---|

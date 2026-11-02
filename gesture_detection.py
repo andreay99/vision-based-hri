@@ -16,8 +16,10 @@ In the integrated app, Person 4 owns the webcam and passes each frame in:
 Run this file directly to test with your own webcam:
 
     python gesture_detection.py
+    python gesture_detection.py --camera 1    # use a different camera
 """
 
+import argparse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -237,9 +239,13 @@ def draw_output(frame: np.ndarray, output: GestureOutput, landmarks: Optional[np
 
 def main() -> None:
     """Standalone development view. Press q to quit."""
-    capture = cv2.VideoCapture(0)
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--camera", type=int, default=0, help="camera number to use (default: 0)")
+    args = parser.parse_args()
+
+    capture = cv2.VideoCapture(args.camera)
     if not capture.isOpened():
-        raise RuntimeError("Could not open the webcam. Check camera permissions.")
+        raise RuntimeError(f"Could not open camera {args.camera}. Check the number and camera permissions.")
 
     try:
         with GestureDetector(mirrored=True) as detector:
